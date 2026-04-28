@@ -25,7 +25,7 @@ public class Main {
             PROJECT_NAME + "_FinalClassReleaseLabels.csv";
 
     private static final String PROJECT_REPO_PATH =
-            "C:\\Users\\edoar\\OneDrive\\Desktop\\ISW2\\openjpa";
+            "/Users/smithvs/Documents/Università/ISW2/syncope";
 
     private static final String TICKET_FIX_COMMITS_FILE =
             PROJECT_NAME + "_TicketFixCommits.csv";
