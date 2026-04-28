@@ -4,14 +4,49 @@ package t.uniroma2.isw2.proportion;
 import t.uniroma2.isw2.model.Release;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
- * Classe che stima la Injected Version usando la proportion media.
+ * Gestisce le operazioni principali della phase proportion:
+ * - calcolo della proportion media
+ * - stima delle IV mancanti
+ * - costruzione della ComputedAV come intervallo [IV, FV)
  */
-public class InjectedVersionEstimator {
+public class ProportionService {
 
-    private InjectedVersionEstimator() {
+    private ProportionService() {
+    }
+
+    public static double calculateAverageProportion(List<EnhancedTicket> tickets, List<Release> releases) {
+        double sum = 0.0;
+        int count = 0;
+
+        for (EnhancedTicket ticket : tickets) {
+            if (!"AV".equals(ticket.getInjectedVersionSource())) {
+                continue;
+            }
+
+            int iv = findReleaseIndex(ticket.getInjectedVersion(), releases);
+            int ov = findReleaseIndex(ticket.getOpeningVersion(), releases);
+            int fv = findReleaseIndex(ticket.getFixedVersion(), releases);
+
+            if (!isValidLifecycle(iv, ov, fv)) {
+                continue;
+            }
+
+            double proportion = (double) (fv - iv) / (double) (fv - ov);
+            sum += proportion;
+            count++;
+        }
+
+        if (count == 0) {
+            return 0.0;
+        }
+
+        return sum / count;
     }
 
     public static List<EnhancedTicket> estimateMissingInjectedVersions(List<EnhancedTicket> tickets,
@@ -26,7 +61,6 @@ public class InjectedVersionEstimator {
             }
 
             String estimatedIv = estimateInjectedVersion(ticket, releases, proportion);
-
             String source = estimatedIv.isBlank() ? "NONE" : "P";
 
             EnhancedTicket updatedTicket = new EnhancedTicket(
@@ -41,6 +75,50 @@ public class InjectedVersionEstimator {
             );
 
             result.add(updatedTicket);
+        }
+
+        return result;
+    }
+
+    public static String buildComputedAv(EnhancedTicket ticket, List<Release> releases) {
+        if (ticket.getInjectedVersion() == null || ticket.getInjectedVersion().isBlank()) {
+            return "";
+        }
+
+        if (ticket.getFixedVersion() == null || ticket.getFixedVersion().isBlank()) {
+            return "";
+        }
+
+        int ivIndex = findReleaseIndex(ticket.getInjectedVersion(), releases);
+        int fvIndex = findReleaseIndex(ticket.getFixedVersion(), releases);
+
+        if (ivIndex == -1 || fvIndex == -1) {
+            return "";
+        }
+
+        if (ivIndex >= fvIndex) {
+            return "";
+        }
+
+        List<String> affectedReleaseNames = new ArrayList<>();
+
+        for (Release release : releases) {
+            int currentIndex = release.getIndex();
+
+            if (currentIndex >= ivIndex && currentIndex < fvIndex) {
+                affectedReleaseNames.add(release.getVersionName());
+            }
+        }
+
+        return affectedReleaseNames.stream().collect(Collectors.joining(";"));
+    }
+
+    public static Map<String, String> buildComputedAvMap(List<EnhancedTicket> tickets,
+                                                         List<Release> releases) {
+        Map<String, String> result = new HashMap<>();
+
+        for (EnhancedTicket ticket : tickets) {
+            result.put(ticket.getTicketId(), buildComputedAv(ticket, releases));
         }
 
         return result;
@@ -87,12 +165,25 @@ public class InjectedVersionEstimator {
         return estimatedRelease.getVersionName();
     }
 
+    private static boolean isValidLifecycle(int ivIndex, int ovIndex, int fvIndex) {
+        return ivIndex != -1
+                && ovIndex != -1
+                && fvIndex != -1
+                && ivIndex <= ovIndex
+                && ovIndex < fvIndex;
+    }
+
     private static int findReleaseIndex(String versionName, List<Release> releases) {
+        if (versionName == null || versionName.isBlank()) {
+            return -1;
+        }
+
         for (Release release : releases) {
             if (release.getVersionName().equalsIgnoreCase(versionName)) {
                 return release.getIndex();
             }
         }
+
         return -1;
     }
 
@@ -102,6 +193,7 @@ public class InjectedVersionEstimator {
                 return release;
             }
         }
+
         return null;
     }
 }

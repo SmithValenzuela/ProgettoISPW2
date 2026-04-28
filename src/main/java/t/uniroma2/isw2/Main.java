@@ -1,21 +1,14 @@
 package t.uniroma2.isw2;
 
-import t.uniroma2.isw2.csv.EnhancedTicketComputedAvCsvWriter;
-import t.uniroma2.isw2.csv.MappingCsvWriter;
-import t.uniroma2.isw2.csv.ReleaseCsvReader;
-import t.uniroma2.isw2.csv.TicketCsvReader;
-import t.uniroma2.isw2.model.Release;
-import t.uniroma2.isw2.model.Ticket;
-import t.uniroma2.isw2.map.TicketReleaseMapping;
+import t.uniroma2.isw2.csv.*;
+import t.uniroma2.isw2.labeling.*;
+import t.uniroma2.isw2.model.*;
 import t.uniroma2.isw2.proportion.*;
 import t.uniroma2.isw2.selector.ReleaseSelector;
-import t.uniroma2.isw2.map.TicketReleaseMapper;
-
 
 import java.io.IOException;
 import java.util.List;
-
-
+import java.util.Map;
 
 /**
  * Classe principale del progetto.
@@ -26,14 +19,21 @@ public class Main {
     private static final String PROJECT_NAME = "SYNCOPE";
     private static final String RELEASES_FILE = PROJECT_NAME + "VersionInfo.csv";
     private static final String TICKETS_FILE = PROJECT_NAME + "Tickets.csv";
-    private static final String ENHANCED_TICKETS_FILE = PROJECT_NAME + "_EnhancedTickets.csv";
-    private static final String AV_BASED_TICKETS_FILE = PROJECT_NAME + "_AVBasedTickets.csv";
-    private static final String ESTIMATED_TICKETS_FILE = PROJECT_NAME + "_EstimatedTickets.csv";
     private static final double RELEASES_TO_KEEP = 0.34;
-    private static final String SELECTED_RELEASES_TICKET_MAP_FILE = PROJECT_NAME + "_SelectedReleaseTicketMap.csv";
-    private static final String ESTIMATED_TICKETS_WITH_COMPUTED_AV_FILE =
-            PROJECT_NAME + "_EstimatedTickets_WithComputedAV.csv";
-    public static void main(String[] args) {
+
+    private static final String FINAL_CLASS_RELEASE_LABELS_FILE =
+            PROJECT_NAME + "_FinalClassReleaseLabels.csv";
+
+    private static final String PROJECT_REPO_PATH =
+            "C:\\Users\\edoar\\OneDrive\\Desktop\\ISW2\\openjpa";
+
+    private static final String TICKET_FIX_COMMITS_FILE =
+            PROJECT_NAME + "_TicketFixCommits.csv";
+
+    private static final String TICKET_BUGGY_CLASSES_FILE =
+            PROJECT_NAME + "_TicketBuggyClasses.csv";
+
+    public static void main(String[] args) throws IOException {
         System.out.println("Avvio costruzione dataset del progetto " + PROJECT_NAME + ".");
 
         try {
@@ -61,25 +61,13 @@ public class Main {
             System.out.println("Ticket letti: " + tickets.size());
 
             /*
-             * STEP 2.1:
-             * Mapping dei ticket alle sole release selezionate.
-             * Questo è utile per iniziare a delimitare il perimetro del dataset.
-             */
-            List<TicketReleaseMapping> selectedMappings =
-                    TicketReleaseMapper.mapTicketsToSelectedReleases(tickets, selectedReleases);
-            MappingCsvWriter.writeMappingsToCsv(SELECTED_RELEASES_TICKET_MAP_FILE, selectedMappings);
-            System.out.println("File mapping ticket-release selezionate creato: "
-                    + SELECTED_RELEASES_TICKET_MAP_FILE);
-
-            /*
              * STEP 3:
              * Arricchimento dei ticket con OV e FV.
              * QUI continuiamo a usare tutte le release, non solo quelle selezionate.
              */
             List<EnhancedTicket> enhancedTickets =
                     TicketVersionEnricher.enrichTickets(tickets, allReleases);
-            EnhancedTicketCsvWriter.writeEnhancedTickets(ENHANCED_TICKETS_FILE, enhancedTickets);
-            System.out.println("File ticket arricchiti creato: " + ENHANCED_TICKETS_FILE);
+            System.out.println("ticket arricchiti creati");
 
             /*
              * STEP 4:
@@ -87,15 +75,14 @@ public class Main {
              */
             List<EnhancedTicket> avBasedTickets =
                     AffectedVersionIVResolver.assignInitialIVFromAV(enhancedTickets, allReleases);
-            EnhancedTicketCsvWriter.writeEnhancedTickets(AV_BASED_TICKETS_FILE, avBasedTickets);
-            System.out.println("File ticket con IV iniziale da AV creato: " + AV_BASED_TICKETS_FILE);
+            System.out.println("ticket con IV iniziale da AV creati");
 
             /*
              * STEP 5:
              * Calcolo della proportion media.
              */
             double proportion =
-                    ProportionCalculator.calculateAverageProportion(avBasedTickets, allReleases);
+                    ProportionService.calculateAverageProportion(avBasedTickets, allReleases);
             System.out.println("Proportion media calcolata: " + proportion);
 
             /*
@@ -103,25 +90,79 @@ public class Main {
              * Stima della IV per i ticket che ancora non la possiedono.
              */
             List<EnhancedTicket> estimatedTickets =
-                    InjectedVersionEstimator.estimateMissingInjectedVersions(
-                            avBasedTickets, allReleases, proportion);
-            EnhancedTicketCsvWriter.writeEnhancedTickets(ESTIMATED_TICKETS_FILE, estimatedTickets);
-            System.out.println("File ticket con IV stimata creato: " + ESTIMATED_TICKETS_FILE);
+                    ProportionService.estimateMissingInjectedVersions(
+                            avBasedTickets, allReleases, proportion
+                    );
+            System.out.println("ticket con IV stimata creato");
 
             System.out.println("Selezione release + fase AV -> IV -> P completate con successo.");
 
             /*
              * STEP 7:
-             * Scrittura di un CSV aggiuntivo con la colonna ComputedAV.
-             * ComputedAV è sempre calcolata come intervallo [IV, FV).
+             * Costruzione in memoria della ComputedAV per ogni ticket stimato.
+             * Nessun passaggio intermedio su CSV.
              */
-            EnhancedTicketComputedAvCsvWriter.writeEnhancedTicketsWithComputedAv(
-                    ESTIMATED_TICKETS_WITH_COMPUTED_AV_FILE,
-                    estimatedTickets,
-                    allReleases
+            Map<String, String> computedAvByTicketId =
+                    ProportionService.buildComputedAvMap(estimatedTickets, allReleases);
+            System.out.println("Ticket con ComputedAV costruiti in memoria: " + computedAvByTicketId.size());
+
+            /*
+             * STEP 8:
+             * Ricerca dei fix commit associati ai ticket nel repository Git.
+             */
+            List<TicketFixCommit> ticketFixCommits =
+                    BuggyClassService.findFixCommits(
+                            estimatedTickets,
+                            PROJECT_REPO_PATH
+                    );
+            TicketFixCommitCsvWriter.writeTicketFixCommits(TICKET_FIX_COMMITS_FILE, ticketFixCommits);
+            System.out.println("File ticket-fix commit creato: " + TICKET_FIX_COMMITS_FILE);
+
+            /*
+             * STEP 9:
+             * Estrazione semplificata delle buggy classes con SZZ.
+             * Sono considerate solo classi Java di produzione.
+             */
+            List<TicketBuggyClass> ticketBuggyClasses =
+                    BuggyClassService.extractBuggyClasses(
+                            ticketFixCommits,
+                            PROJECT_REPO_PATH
+                    );
+            TicketBuggyClassCsvWriter.writeTicketBuggyClasses(
+                    TICKET_BUGGY_CLASSES_FILE,
+                    ticketBuggyClasses
             );
-            System.out.println("File ticket con ComputedAV creato: "
-                    + ESTIMATED_TICKETS_WITH_COMPUTED_AV_FILE);
+            System.out.println("File ticket-buggy classes creato: " + TICKET_BUGGY_CLASSES_FILE);
+
+            /*
+             * STEP 10-11:
+             * Per ogni release selezionata:
+             * - trova il commit snapshot
+             * - estrae tutte le classi Java di produzione presenti
+             */
+            List<ReleaseJavaClass> releaseJavaClasses =
+                    ReleaseInventoryService.buildReleaseInventory(
+                            PROJECT_NAME,
+                            selectedReleases,
+                            PROJECT_REPO_PATH
+                    );
+            System.out.println("Coppie classe-release generate: " + releaseJavaClasses.size());
+
+            /*
+             * STEP 12-13:
+             * Costruzione dei positivi e merge finale yes/no
+             * direttamente dentro FinalDatasetCsvWriter.
+             */
+            FinalDatasetCsvWriter.writeFinalDataset(
+                    FINAL_CLASS_RELEASE_LABELS_FILE,
+                    releaseJavaClasses,
+                    selectedReleases,
+                    computedAvByTicketId,
+                    ticketBuggyClasses
+            );
+            System.out.println("File finale classe-release yes/no creato: "
+                    + FINAL_CLASS_RELEASE_LABELS_FILE);
+
         } catch (IOException e) {
             System.out.println("Errore durante l'esecuzione del flusso principale.");
             e.printStackTrace();
